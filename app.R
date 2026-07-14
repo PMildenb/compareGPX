@@ -84,11 +84,6 @@ server <- function(input, output, session) {
         error = function(e) NULL
       )
 
-      point_layer <- tryCatch(
-        st_read(file_path, layer = "track_points", quiet = TRUE),
-        error = function(e) NULL
-      )
-
       if (!is.null(track_layer) && nrow(track_layer) > 0) {
         current_tracks[[id_prefix]] <- list(
           data = track_layer,
@@ -96,10 +91,75 @@ server <- function(input, output, session) {
         )
       }
 
+      # Read track points - for GPX files, we need to extract points from the tracks
+      point_layer <- tryCatch({
+        # First try reading the GPX with layer specification
+        # GPX files typically have layers: tracks, track_points, waypoints, routes
+        
+        # Check available layers
+        available_layers <- st_layers(file_path)
+        
+        # Try different layer names for track points
+        point_layer_names <- c("track_points", "points", "waypoints")
+        found_layer <- FALSE
+        
+        for (layer_name in point_layer_names) {
+          if (layer_name %in% available_layers$name) {
+            pt_data <- st_read(file_path, layer = layer_name, quiet = TRUE)
+            if (!is.null(pt_data) && nrow(pt_data) > 0) {
+              point_layer <- pt_data
+              found_layer <- TRUE
+              break
+            }
+          }
+        }
+        
+        if (!found_layer && !is.null(track_layer) && nrow(track_layer) > 0) {
+          # If no track_points layer found, extract points from the tracks layer
+          # GPX tracks are stored as LINESTRING, we need to extract individual points
+          track_geom <- track_layer$geometry
+          if (!is.null(track_geom)) {
+            # Convert LINESTRING to POINTs
+            points_list <- lapply(st_geometry(track_geom), function(geom) {
+              if (st_geometry_type(geom) == "MULTILINESTRING") {
+                coords <- st_coordinates(st_line_merge(geom))
+              } else if (st_geometry_type(geom) == "LINESTRING") {
+                coords <- st_coordinates(geom)
+              } else {
+                return(NULL)
+              }
+              if (!is.null(coords) && nrow(coords) > 0) {
+                # coords from st_coordinates is already a matrix with X,Y columns
+                st_sf(geometry = st_points(coords), crs = st_crs(track_layer))
+              } else {
+                NULL
+              }
+            })
+            
+            # Filter out NULL entries and combine
+            points_list <- points_list[!sapply(points_list, is.null)]
+            if (length(points_list) > 0) {
+              point_layer <- do.call(rbind, points_list)
+              found_layer <- TRUE
+            }
+          }
+        }
+        
+        if (!found_layer) {
+          NULL
+        } else {
+          point_layer
+        }
+        
+      }, error = function(e) NULL)
+
       if (!is.null(point_layer) && nrow(point_layer) > 0) {
-
-        point_layer <- st_transform(point_layer, 4326)
-
+        # Ensure point_layer is in EPSG:4326
+        if (st_crs(point_layer)$epsg != 4326) {
+          point_layer <- st_transform(point_layer, 4326)
+        }
+        
+        # Extract time information
         time_col <- intersect(
           c("time", "Time", "timestamp", "Timestamp"),
           names(point_layer)
@@ -111,7 +171,7 @@ server <- function(input, output, session) {
           point_layer$track_timestamp <- as.character(point_layer[[time_col[1]]])
         }
 
-        point_layer$file_name <- file_name
+        point_layer$gpx_file_name <- file_name
         point_layer$point_id <- paste0(id_prefix, "_", seq_len(nrow(point_layer)))
 
         current_points[[id_prefix]] <- point_layer
@@ -122,25 +182,20 @@ server <- function(input, output, session) {
     track_points(current_points)
   })
 
-  observe({
-
+  # Separate observers to avoid full map redraw on every change
+  # 1) Draw / update tracks when `tracks` changes
+  observeEvent(tracks(), {
     trks <- tracks()
-    pts <- track_points()
-
-    leafletProxy("map") |>
-      clearShapes() |>
-      clearMarkers() |>
-      clearControls()
-
+    colors <- track_colors()
+    leafletProxy("map") |> clearGroup("track")
     if (length(trks) > 0) {
-
-      colors <- track_colors()
-
       for (i in seq_along(trks)) {
-
         trk <- trks[[i]]
-        track_sf <- st_transform(trk$data, 4326)
-
+        track_sf <- trk$data
+        # Only transform if not already in EPSG:4326 (GPX files are typically already in 4326)
+        if (st_crs(track_sf)$epsg != 4326) {
+          track_sf <- st_transform(track_sf, 4326)
+        }
         leafletProxy("map") |>
           addPolylines(
             data = track_sf,
@@ -148,14 +203,20 @@ server <- function(input, output, session) {
             weight = 4,
             opacity = 0.9,
             label = trk$name,
-            group = trk$name
+            group = "track"
           )
       }
+    }
+  })
 
+  # 2) Draw / update points when `track_points` changes
+  observeEvent(track_points(), {
+    pts <- track_points()
+    colors <- track_colors()
+    leafletProxy("map") |> clearGroup("point")
+    if (length(pts) > 0) {
       for (i in seq_along(pts)) {
-
         pt <- pts[[i]]
-        
         leafletProxy("map") |>
           addCircleMarkers(
             data = pt,
@@ -164,67 +225,91 @@ server <- function(input, output, session) {
             weight = 1,
             fillOpacity = 0.5,
             layerId = ~point_id,
+            group = "point",
             popup = ~paste(
-              "<b>File:</b>", file_name,
+              "<b>File:</b>", gpx_file_name,
               "<br><b>Time:</b>", track_timestamp
             )
           )
-      } 
+      }
     }
   })
 
-  observeEvent(input$map_marker_click, {
+  observeEvent(input$map_click, {
 
-    click <- input$map_marker_click
-    req(click$id)
+    click <- input$map_click
+    req(click)
 
     pts <- track_points()
     if (length(pts) == 0) return()
 
-    all_pts <- do.call(rbind, pts)
-
-    selected <- all_pts |>
-      filter(point_id == click$id)
-
-    if (nrow(selected) == 0) return()
-
-    current     <- marked_points()
+    current <- marked_points()
     track_names <- names(pts)
-
-    track_idx <- which(vapply(
-      pts,
-      function(x) selected$point_id[1] %in% x$point_id,
-      logical(1)
-    ))
-
-    if (length(track_idx) == 0) return()
-
-    col_name <- paste0("track_", track_idx)
-    current  <- marked_points()
 
     if (is.null(current) || nrow(current) == 0) {
 
       current <- data.frame(idx = integer())
 
       for (i in seq_along(track_names)) {
-        current[[paste0("track_", i)]] <- character()
+        current[[paste0("track_", i)]] <- NA_character_
       }
     }
 
-    local_idx <- sum(!is.na(current[[col_name]]) & current[[col_name]] != "") + 1
+    click_sf <- st_point(c(click$lng, click$lat)) |> st_sf(crs = 4326)
 
-    while (nrow(current) < local_idx) {
+    for (track_idx in seq_along(pts)) {
 
-      new_row <- data.frame(idx = nrow(current) + 1)
-
-      for (i in seq_along(track_names)) {
-        new_row[[paste0("track_", i)]] <- NA_character_
+      col_name <- paste0("track_", track_idx)
+      track_pts <- pts[[track_idx]]
+      
+      # Only transform if not already in EPSG:4326 (GPX files are typically already in 4326)
+      if (st_crs(track_pts)$epsg != 4326) {
+        track_pts <- st_transform(track_pts, 4326)
       }
 
-      current <- bind_rows(current, new_row)
+      if (nrow(track_pts) > 0) {
+
+        dists <- st_distance(click_sf, track_pts)
+        closest_idx <- which.min(dists)
+
+        closest_point <- track_pts[closest_idx, ]
+        timestamp <- closest_point$track_timestamp[1]
+
+        local_idx <- sum(!is.na(current[[col_name]]) & current[[col_name]] != "") + 1
+
+        while (nrow(current) < local_idx) {
+
+          new_row <- data.frame(idx = nrow(current) + 1)
+
+          for (i in seq_along(track_names)) {
+            new_row[[paste0("track_", i)]] <- NA_character_
+          }
+
+          current <- bind_rows(current, new_row)
+        }
+
+        current[local_idx, col_name] <- timestamp
+      }
     }
 
-    current[local_idx, col_name] <- selected$track_timestamp[1]
+    for (track_idx in seq_along(track_names)) {
+
+      col_name <- paste0("track_", track_idx)
+      track_times <- current[[col_name]]
+      non_na_times <- track_times[!is.na(track_times) & track_times != ""]
+      if (length(non_na_times) > 0) {
+        tryCatch({
+          sorted_times <- sort(as.POSIXct(non_na_times, tz = "UTC"))
+          sorted_times_char <- as.character(sorted_times)
+          current[1:length(sorted_times_char), col_name] <- sorted_times_char
+          if (nrow(current) > length(sorted_times_char)) {
+            current[(length(sorted_times_char)+1):nrow(current), col_name] <- NA_character_
+          }
+        }, error = function(e) {
+          warning("Failed to sort timestamps for track ", track_idx, ": ", e$message)
+        })
+      }
+    }
 
     marked_points(current)
   })
