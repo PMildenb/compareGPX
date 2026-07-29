@@ -2,16 +2,13 @@ library(shiny)      # Shiny and UI
 library(shinydashboard)
 library(leaflet)    # Mapping
 library(sf)          # Spatial data
-library(dplyr)
 library(data.table)  # Efficient data manipulation
-
 
 ui <- dashboardPage(
   dashboardHeader(title = "compareGPX"),
   
   dashboardSidebar(
-    fileInput(
-      "gpx_files",
+    fileInput("gpx_files",
       "Upload GPX File(s)",
       multiple = TRUE,
       accept = c(".gpx")
@@ -20,9 +17,7 @@ ui <- dashboardPage(
   ),
   
   dashboardBody(
-    fluidRow(
-      box(width = 12, leafletOutput("map", height = "400px"))
-    ),
+    fluidRow( box(width = 12, leafletOutput("map", height = "400px")) ),
     fluidRow(
       box(width = 12, title = "Marked Trackpoints", tableOutput("marked_table"))
     )
@@ -47,7 +42,7 @@ server <- function(input, output, session) {
   output$map <- renderLeaflet({
     leaflet() |>
       addProviderTiles(providers$OpenStreetMap.Mapnik) |>
-      setView(lng = 8.8, lat = 49.8, zoom = 8)
+      setView(lng = 8.5, lat = 49.6, zoom = 11)
   })
 
   # Process uploaded GPX files
@@ -60,7 +55,7 @@ server <- function(input, output, session) {
     for (i in seq_len(n_files)) {
       file_path  <- input$gpx_files$datapath[i]
       file_name  <- input$gpx_files$name[i]
-      id_prefix  <- paste0(file_name, "_", as.numeric(Sys.time()), "_", i)
+      id_prefix  <- paste0(file_name, "_", i)
 
       track_layer <- tryCatch(
         st_read(file_path, layer = "tracks", quiet = TRUE),
@@ -85,7 +80,6 @@ server <- function(input, output, session) {
         point_layer$point_id <- paste0(id_prefix, "_", seq_len(nrow(point_layer)))
         current_points[[id_prefix]] <- point_layer
       }
-      cat(point_layer$track_timestamp)
     }
     tracks(current_tracks)
     track_points(current_points)
@@ -96,7 +90,7 @@ server <- function(input, output, session) {
     trks <- tracks()
     pts  <- track_points()
     
-    leafletProxy("map") |> clearShapes() |> clearMarkers() |> clearControls()
+    leafletProxy("map") |> clearShapes() |> clearMarkers() 
 
     if (length(trks)) {
       colors <- track_colors()
@@ -126,39 +120,48 @@ server <- function(input, output, session) {
     req(click$id)
     pts <- track_points()
     if (!length(pts)) return()
-
+  
     all_pts <- rbindlist(Filter(NROW, pts), fill = TRUE)
     selected <- all_pts[point_id == click$id]
     if (!nrow(selected)) return()
-
+  
     track_names <- names(pts)
     track_idx <- which(sapply(
       pts, function(x) !is.null(x$point_id) &&
         selected$point_id[1] %in% x$point_id
     ))
     if (!length(track_idx)) return()
-
+  
     col_name  <- paste0("track_", track_idx)
     current   <- marked_points()
-
+    timestamp <- selected$track_timestamp[1]
+  
     if (is.null(current) || !nrow(current)) {
       current <- data.table(idx = integer())
       for (i in seq_along(track_names))
         current[[paste0("track_", i)]] <- character()
     }
-
-    non_empty <- !is.na(current[[col_name]]) & current[[col_name]] != ""
-    local_idx <- sum(non_empty) + 1
+  
+    # Check if this point is already marked (toggle logic)
+    existing_match <- which(!is.na(current[[col_name]]) & current[[col_name]] == timestamp)
     
-    if (local_idx > nrow(current)) {
-      new_idx <- (nrow(current) + 1):local_idx
-      new_rows <- data.table(idx = new_idx)
-      for (i in seq_along(track_names))
-        new_rows[[paste0("track_", i)]] <- NA_character_
-      current <- rbindlist(list(current, new_rows), fill = TRUE)
+    if (length(existing_match) > 0) {
+      current[existing_match, (col_name) := NA_character_]
+    } else {
+      non_empty <- !is.na(current[[col_name]]) & current[[col_name]] != ""
+      local_idx <- sum(non_empty) + 1
+      
+      if (local_idx > nrow(current)) {
+        new_idx <- (nrow(current) + 1):local_idx
+        new_rows <- data.table(idx = new_idx)
+        for (i in seq_along(track_names))
+          new_rows[[paste0("track_", i)]] <- NA_character_
+        current <- rbindlist(list(current, new_rows), fill = TRUE)
+      }
+      
+      current[local_idx, (col_name) := timestamp]
     }
     
-    current[local_idx, (col_name) := selected$track_timestamp[1]]
     marked_points(current)
   })
 
@@ -170,13 +173,8 @@ output$marked_table <- renderTable({
     return(as.data.frame(tbl))
   track_cols <- grep("^track_", names(tbl), value = TRUE)
   for (col in track_cols) {
-    x <- tbl[[col]]
-    valid <- !(is.na(x) | x == "")
-    if (any(valid)) {
-      formatted <- sort_n_format(x[valid])
-      tbl[[col]] <- NA_character_
-      tbl[[col]][seq_along(formatted)] <- formatted
-    }
+    x <- sort_n_format(tbl[[col]])
+    tbl[[col]][seq_along(x)] <- x
   }
   as.data.frame(tbl)
 })
@@ -186,8 +184,9 @@ output$marked_table <- renderTable({
     tracks(list())
     track_points(list())
     marked_points(data.table(idx = integer()))
-    leafletProxy("map") |> clearShapes() |> clearMarkers() |> clearControls()
+    leafletProxy("map") |> clearShapes() |> clearMarkers() 
   })
 }
 
 shinyApp(ui, server)
+
