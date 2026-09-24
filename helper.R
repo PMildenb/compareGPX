@@ -3,9 +3,16 @@
 # test_times2 <- c("2026-07-22 09:15:20", "2026-07-22 09:16:35", "2026-07-22 09:17:45", "2026-07-22 09:18:10")
 
 
+read_gpx_layer <- function(path, layer) {
+  tryCatch(
+    st_read(path, layer = layer, quiet = TRUE),
+    error = function(e) NULL
+  )
+}
+
 sort_n_format <- function(x) {
         x <- x[!(is.na(x) | x=="")]
-        if(!length(x)) return(NA)
+        if(!length(x)) return(NA_character_)
   
         posix <- as.POSIXct(x) |> sort()
         diffs <-difftime(posix, data.table:::shift(posix),units="secs" )[-1] |> 
