@@ -19,7 +19,48 @@ ui <- dashboardPage(
   ),
   
   dashboardBody(
-    fluidRow( box(width=12, leafletOutput("map", height = "400px")) ),
+    tags$head(
+      tags$style(HTML("
+        #map_wrapper { height: calc(100vh - 160px); min-height: 250px; }
+        #map_wrapper .html-widget { height: 100% !important; }
+        #drag_handle {
+          height: 8px; margin: 4px 0; border-radius: 4px;
+          background: #b8c2ce; cursor: row-resize; user-select: none;
+        }
+      ")),
+      tags$script(HTML("
+        $(function() {
+          var wrapper = document.getElementById('map_wrapper');
+          var handle  = document.getElementById('drag_handle');
+          var dragging = false, startY = 0, startH = 0;
+          function resizeMap() {
+            var map = HTMLWidgets.find(document.getElementById('map'));
+            if (map) map.invalidateSize();
+          }
+          $(handle).on('mousedown', function(e) {
+            dragging = true;
+            startY = e.pageY;
+            startH = wrapper.getBoundingClientRect().height;
+            e.preventDefault();
+          });
+          $(document).on('mousemove', function(e) {
+            if (!dragging) return;
+            wrapper.style.height = Math.max(250, startH + (e.pageY - startY)) + 'px';
+            resizeMap();
+          });
+          $(document).on('mouseup', function() { dragging = false; });
+          $(handle).on('dblclick', function() {
+            wrapper.style.height = '';
+            resizeMap();
+          });
+          $(window).on('resize', resizeMap);
+        });
+      "))
+    ),
+    fluidRow( box(width=12,
+      div(id = "map_wrapper", leafletOutput("map", height = "100%")),
+      div(id = "drag_handle", title = "Drag to resize the map, double-click to reset")
+    )),
     fluidRow( box(width=12, title = "Marked Trackpoints", tableOutput("marked_table")) )
   )
 )
@@ -131,6 +172,7 @@ server <- function(input, output, session) {
   # Group semantics: if all nearest points are already marked, unmark them;
   # otherwise mark them all. Tracks whose nearest point is more than 50 m
   # from the click are ignored; if no track is within 50 m, nothing happens.
+  ## TODO: Clean up. Toggle doesnt really work
   toggle_nearest_at <- function(lat, lng) {
     pts <- track_points()
     colors <- track_colors()
@@ -159,6 +201,7 @@ server <- function(input, output, session) {
   })
 
   # Click on a track polyline
+  ## TODO: This works only sometimes (?)
   observeEvent(input$map_shape_click, {
     toggle_nearest_at(input$map_shape_click$lat, input$map_shape_click$lng)
   })

@@ -1,0 +1,143 @@
+---
+title: >
+  Geo-Visualisationen in R  
+subtitle: >
+   - oder: "Evidence-based Commuting" 
+author:
+- name: Philipp Mildenberger
+  affiliation: 
+  - Institute of Medical Biostatistics, Epidemiology and Informatics (IMBEI), Mainz, Germany
+  email: pmildenb@uni-mainz.de
+date: "2026-09-29"
+format: 
+  revealjs:
+    include-in-header:
+      text: |
+        <style>
+        :root { --r-main-font-size: 28px; }
+        .reveal .cell .cell-output-display { margin-top: 0.75em; }
+        .reveal div.sourceCode { overflow: visible; }
+        </style>
+    theme: 
+    - default
+    - ummz_reveal_theme.scss
+    embed-resources: true
+    mainfont: "Atkinson Hyperlegible"
+    ## making links automatically open in a new window 
+    link-external-newwindow: true
+    incremental: false
+    # incremental: true
+    footer: "Dienstagsvortrag Mildenberger 2026-09-29"
+    slide-number: c/t
+---
+
+## Aktuelle Projekte im Schnelldurchlauf
+  
+<br>
+
+* **GaDiaKi**   -   Ganzheitliche Diabetesversorgung im Kindesalter
+
+  ::: {.fragment}
+  * *Zentrums-Rekrutierung* & *Patientenrekrutierung*
+  * Inhaltlich wenig neues seit letztem Dienstagsvortrag
+  <br><br>
+  :::
+
+* **EnableHip**   -   verkürzte Antikoagulation nach Hüft-OP
+
+  ::: {.fragment}
+  * *Patientenrekrutierung*
+  * Inhaltlich wenig neues seit vorletztem Dienstagsvortrag
+  <br><br>
+  :::
+
+* **Net-Wait**   -   Gruppenintervention während Wartezeit auf ambulanten Therapieplatz
+
+  ::: {.fragment}
+  * Soll ein Verschlechtern der Symptome bei Angststörungen u. Depressionen verhindern
+  * Frisch eingereichter Antrag beim BMFTR <br>
+    (Hoffentlich) Thema bei meinem nächsten Dienstagsvortrag 
+  :::
+
+
+## Stattdessen:  **"Evidence-based Commuting"**
+
+<br> 
+
+### Wer kennt das auch?
+
+* Man geht eine Strecke fast jeden Tag,  
+* doch an ein paar Stellen ist immer unklar, ,<br> 
+  ob links oder rechts tatschächlich schneller ist
+
+<br>
+
+* -> Aufzeichnen meines Arbeitswegs (als .gpx)
+
+```
+  <trk>
+    <trkseg>
+      <trkpt lat="49.21435" lon="8.62615">
+        <ele>140.8</ele>
+        <time>2026-08-10T06:10:21Z</time>
+        <hdop>3.8</hdop>
+      </trkpt>
+      <trkpt lat="49.21357" lon="8.62463">
+        <ele>144.7</ele>
+        <time>2026-08-10T06:10:32Z</time>
+        <hdop>4.4</hdop>
+      ...
+      ...
+```
+
+## `leaflet` visualisiert Karten
+
+<br>
+
+```{r, echo=TRUE}
+library(leaflet)
+leaflet() |>
+      addProviderTiles(providers$OpenStreetMap.HOT) |>
+      setView(lng = 8.275, lat = 50, zoom = 14)
+```
+
+## `sf` zeichnet auf Karten
+
+<br> 
+
+```{r, echo=TRUE}
+library(sf)
+track <- st_read("../sampleTracks/Bonifatius_to_UM.gpx", 
+                 layer = "tracks", quiet = TRUE)
+
+leaflet() |>
+      addProviderTiles(providers$OpenStreetMap.HOT) |>
+      setView(lng = 8.275, lat = 50, zoom = 14)|>
+      addPolylines(data = track, color = "red", weight = 10) 
+```
+
+
+
+## `sf` lässt uns auch interagieren
+
+<br> 
+
+```{r, echo=TRUE}
+leaflet() |>
+      addProviderTiles(providers$OpenStreetMap.HOT) |>
+      setView(lng = 8.275, lat = 50, zoom = 14)|>
+      addPolylines(data = track, color = "red", weight = 10,
+                   label = ~name)
+```
+
+
+
+## Mini-Shinyapp `CompareGPX`
+
+<br>
+<br>
+<br>
+
+<div style="text-align: center;">
+<a href="https://pnilden.shinyapps.io/compareGPX/">Live Demo</a>
+</div>
